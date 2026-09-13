@@ -122,6 +122,7 @@ class TestForecastingInvariants(unittest.TestCase):
         new_row['status'] = 'scheduled'
         new_row['direction'] = 'credit'
         new_row['event_type'] = 'income'
+        new_row['category'] = 'income'
         new_row['settlement_date'] = '2025-02-10'
         new_row['home_amount'] = 500.0
         new_row['amount'] = 500.0

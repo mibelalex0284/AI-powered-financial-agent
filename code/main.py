@@ -83,7 +83,7 @@ def run_pipeline(
     image_resolver = ImageAmountResolver(images_df)
     normalizer = EventNormalizer(events_df, images_df, fx_provider)
     income_forecaster = ConfirmedIncomeForecaster(messages_df)
-    expense_forecaster = ExpenseForecaster()
+    expense_forecaster = ExpenseForecaster(messages_df)
 
     # 3. Initialize Decision Engine
     print(f"[3/6] Initializing decision optimizer (stat='{variable_spending_stat}')...")

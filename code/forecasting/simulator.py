@@ -13,6 +13,7 @@ Tracks:
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import calendar
 from typing import Dict, List, Optional, Set, Tuple
 import pandas as pd
 import numpy as np
@@ -74,6 +75,15 @@ class DailyCashFlowSimulator:
         for s_date, amt in sched_incomes:
             sched_income_map[s_date] = sched_income_map.get(s_date, 0.0) + amt
 
+        # Track dates with explicit scheduled salary credits
+        sched_salary_dates = set()
+        for _, r in user_events[
+            (user_events['category'] == 'salary')
+            & (user_events['status'] == 'scheduled')
+            & (user_events['direction'] == 'credit')
+        ].iterrows():
+            sched_salary_dates.add(str(r['settlement_date'])[:10])
+
         sched_debits = self.expense_forecaster.get_future_scheduled_debits(user_events, request_date)
         sched_debit_map: Dict[str, float] = {}
         scheduled_categories_by_month: Set[Tuple[str, int, int]] = set()  # (cat, year, month)
@@ -93,7 +103,10 @@ class DailyCashFlowSimulator:
         )
 
         # 5. Variable essential spending daily rate from calendar-week aggregation
-        var_stats = self.expense_forecaster.get_variable_essential_stats(user_events, request_date)
+        recurring_cats = set(recurring_commitments.keys())
+        var_stats = self.expense_forecaster.get_variable_essential_stats(
+            user_events, request_date, exclude_categories=recurring_cats
+        )
         weekly_stat = var_stats.get(self.stat_key, var_stats.get('median', 0.0))
         daily_var_rate = weekly_stat / 7.0 if weekly_stat > 0 else 0.0
 
@@ -118,16 +131,23 @@ class DailyCashFlowSimulator:
                 if next_income_date is None and day_offset > 0:
                     next_income_date = date_str
 
-            # Inflow B: Recurring salary (if no explicit scheduled income today)
-            if salary_schedule is not None and date_str not in sched_income_map:
+            # Inflow B: Recurring salary (if no explicit scheduled salary today)
+            if salary_schedule is not None and date_str not in sched_salary_dates:
                 is_pay_day = False
-                if salary_schedule.cadence == 'monthly' and cur_date.day == salary_schedule.day_of_month:
-                    is_pay_day = True
+                if salary_schedule.cadence == 'monthly' and salary_schedule.day_of_month is not None:
+                    max_m_day = calendar.monthrange(cur_date.year, cur_date.month)[1]
+                    target_pay_day = min(salary_schedule.day_of_month, max_m_day)
+                    if cur_date.day == target_pay_day:
+                        is_pay_day = True
                 elif salary_schedule.cadence == 'weekly' and cur_date.weekday() == salary_schedule.day_of_week:
                     is_pay_day = True
                 elif salary_schedule.cadence == 'biweekly' and salary_schedule.anchor_date:
                     anchor_dt = datetime.strptime(salary_schedule.anchor_date, "%Y-%m-%d")
                     if (cur_date - anchor_dt).days > 0 and (cur_date - anchor_dt).days % 14 == 0:
+                        is_pay_day = True
+                elif salary_schedule.cadence == 'triweekly' and salary_schedule.anchor_date:
+                    anchor_dt = datetime.strptime(salary_schedule.anchor_date, "%Y-%m-%d")
+                    if (cur_date - anchor_dt).days > 0 and (cur_date - anchor_dt).days % 21 == 0:
                         is_pay_day = True
 
                 if is_pay_day:
@@ -146,13 +166,20 @@ class DailyCashFlowSimulator:
                     continue
 
                 is_expense_day = False
-                if rec_exp.cadence == 'monthly' and cur_date.day == rec_exp.day_of_month:
-                    is_expense_day = True
+                if rec_exp.cadence == 'monthly' and rec_exp.day_of_month is not None:
+                    max_m_day = calendar.monthrange(cur_date.year, cur_date.month)[1]
+                    target_exp_day = min(rec_exp.day_of_month, max_m_day)
+                    if cur_date.day == target_exp_day:
+                        is_expense_day = True
                 elif rec_exp.cadence == 'weekly' and cur_date.weekday() == rec_exp.day_of_week:
                     is_expense_day = True
                 elif rec_exp.cadence == 'biweekly' and rec_exp.anchor_date:
                     anchor_dt = datetime.strptime(rec_exp.anchor_date, "%Y-%m-%d")
                     if (cur_date - anchor_dt).days > 0 and (cur_date - anchor_dt).days % 14 == 0:
+                        is_expense_day = True
+                elif rec_exp.cadence == 'triweekly' and rec_exp.anchor_date:
+                    anchor_dt = datetime.strptime(rec_exp.anchor_date, "%Y-%m-%d")
+                    if (cur_date - anchor_dt).days > 0 and (cur_date - anchor_dt).days % 21 == 0:
                         is_expense_day = True
 
                 if is_expense_day:

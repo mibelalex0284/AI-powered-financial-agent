@@ -6,6 +6,7 @@ Highly optimized: pre-computes baseline cash flows once per request.
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import calendar
 from typing import Dict, List, Optional, Set, Tuple
 import pandas as pd
 
@@ -54,6 +55,7 @@ class UserBaselineCashflows:
     initial_balance: float
     minimum_balance_to_keep: float
     sched_income_map: Dict[str, float]
+    sched_salary_dates: Set[str]
     sched_debit_map: Dict[str, float]
     scheduled_categories_by_month: Set[Tuple[str, int, int]]
     recurring_commitments: List[RecurringExpense]
@@ -91,6 +93,15 @@ class PlanSafetyEvaluator:
         sched_incomes = self.income_forecaster.get_future_scheduled_income(user_events, request_date)
         sched_income_map = {s_date: amt for s_date, amt in sched_incomes}
 
+        # Explicit scheduled salary credits
+        sched_salary_dates = set()
+        for _, r in user_events[
+            (user_events['category'] == 'salary')
+            & (user_events['status'] == 'scheduled')
+            & (user_events['direction'] == 'credit')
+        ].iterrows():
+            sched_salary_dates.add(str(r['settlement_date'])[:10])
+
         sched_debits = self.expense_forecaster.get_future_scheduled_debits(user_events, request_date)
         sched_debit_map: Dict[str, float] = {}
         scheduled_categories_by_month: Set[Tuple[str, int, int]] = set()
@@ -107,7 +118,10 @@ class PlanSafetyEvaluator:
         salary_schedule = self.income_forecaster.get_recurring_salary_schedule(user_id, user_events, request_date)
 
         # 5. Variable essential spending daily rate
-        var_stats = self.expense_forecaster.get_variable_essential_stats(user_events, request_date)
+        rec_cats = set(recs.keys())
+        var_stats = self.expense_forecaster.get_variable_essential_stats(
+            user_events, request_date, exclude_categories=rec_cats
+        )
         weekly_stat = var_stats.get(self.stat_key, var_stats.get('median', 0.0))
         daily_var_rate = weekly_stat / 7.0 if weekly_stat > 0 else 0.0
 
@@ -117,6 +131,7 @@ class PlanSafetyEvaluator:
             initial_balance=initial_balance,
             minimum_balance_to_keep=minimum_balance_to_keep,
             sched_income_map=sched_income_map,
+            sched_salary_dates=sched_salary_dates,
             sched_debit_map=sched_debit_map,
             scheduled_categories_by_month=scheduled_categories_by_month,
             recurring_commitments=recurring_commitments,
@@ -172,15 +187,22 @@ class PlanSafetyEvaluator:
             # Inflow
             if date_str in sched_inc:
                 daily_income += sched_inc[date_str]
-            elif sal is not None:
+            if sal is not None and date_str not in baseline.sched_salary_dates:
                 is_pay = False
-                if sal.cadence == 'monthly' and cur_date.day == sal.day_of_month:
-                    is_pay = True
+                if sal.cadence == 'monthly' and sal.day_of_month is not None:
+                    max_m_day = calendar.monthrange(cur_date.year, cur_date.month)[1]
+                    target_pay_day = min(sal.day_of_month, max_m_day)
+                    if cur_date.day == target_pay_day:
+                        is_pay = True
                 elif sal.cadence == 'weekly' and cur_date.weekday() == sal.day_of_week:
                     is_pay = True
                 elif sal.cadence == 'biweekly' and sal.anchor_date:
                     anchor_dt = datetime.strptime(sal.anchor_date, "%Y-%m-%d")
                     if (cur_date - anchor_dt).days > 0 and (cur_date - anchor_dt).days % 14 == 0:
+                        is_pay = True
+                elif sal.cadence == 'triweekly' and sal.anchor_date:
+                    anchor_dt = datetime.strptime(sal.anchor_date, "%Y-%m-%d")
+                    if (cur_date - anchor_dt).days > 0 and (cur_date - anchor_dt).days % 21 == 0:
                         is_pay = True
                 if is_pay:
                     daily_income += sal.amount
@@ -199,13 +221,20 @@ class PlanSafetyEvaluator:
                 rc_amt = reduced_categories.get(rc.category, rc.amount)
 
                 is_due = False
-                if rc.cadence == 'monthly' and cur_date.day == rc.day_of_month:
-                    is_due = True
+                if rc.cadence == 'monthly' and rc.day_of_month is not None:
+                    max_m_day = calendar.monthrange(cur_date.year, cur_date.month)[1]
+                    target_exp_day = min(rc.day_of_month, max_m_day)
+                    if cur_date.day == target_exp_day:
+                        is_due = True
                 elif rc.cadence == 'weekly' and cur_date.weekday() == rc.day_of_week:
                     is_due = True
                 elif rc.cadence == 'biweekly' and rc.anchor_date:
                     anchor_dt = datetime.strptime(rc.anchor_date, "%Y-%m-%d")
                     if (cur_date - anchor_dt).days > 0 and (cur_date - anchor_dt).days % 14 == 0:
+                        is_due = True
+                elif rc.cadence == 'triweekly' and rc.anchor_date:
+                    anchor_dt = datetime.strptime(rc.anchor_date, "%Y-%m-%d")
+                    if (cur_date - anchor_dt).days > 0 and (cur_date - anchor_dt).days % 21 == 0:
                         is_due = True
 
                 if is_due:

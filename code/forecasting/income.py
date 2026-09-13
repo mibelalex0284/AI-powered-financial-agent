@@ -31,9 +31,14 @@ class ConfirmedIncomeForecaster:
         self._parse_message_rules()
 
     def _parse_message_rules(self):
-        """Extract explicit payroll directives, contract ends, and confirmed salary adjustments."""
+        """
+        Extract explicit authoritative payroll directives, contract ends, and confirmed salary adjustments
+        using general pattern matching over untrusted evidence.
+        """
+        import re
         self.terminated_users = set()
         self.salary_overrides: Dict[str, float] = {}
+        self.pay_day_overrides: Dict[str, int] = {}
 
         if self.messages_df.empty:
             return
@@ -41,52 +46,59 @@ class ConfirmedIncomeForecaster:
         for _, m in self.messages_df.iterrows():
             uid = str(m.get('user_id', '')).strip()
             txt = str(m.get('message_text', ''))
+            txt_lower = txt.lower()
 
             # 1. Explicit termination of employment / contract
-            # Must strictly specify employment/contract end, NOT uncredited payouts or prize claims
             if (
-                'employment has ended' in txt.lower()
-                or 'kontrak musiman saat ini telah berakhir' in txt.lower()
-                or ('contract has ended' in txt.lower() and 'seasonal' in txt.lower())
-                or 'sumber pendapatan kerja rumah tangga telah berakhir' in txt.lower()
+                'employment has ended' in txt_lower
+                or 'kontrak musiman saat ini telah berakhir' in txt_lower
+                or ('contract has ended' in txt_lower and 'seasonal' in txt_lower)
+                or 'sumber pendapatan kerja rumah tangga telah berakhir' in txt_lower
             ):
                 self.terminated_users.add(uid)
 
-            # 2. Confirmed salary overrides / amendments
-            if 'reduced to EUR 1422.85' in txt:
-                self.salary_overrides[uid] = 1422.85
-            elif 'naik menjadi IDR 42750000' in txt:
-                self.salary_overrides[uid] = 42750000.0
-            elif 'Gaji pokok yang dikonfirmasi adalah IDR 38760000' in txt:
-                self.salary_overrides[uid] = 38760000.0
-            elif 'Sisa gaji bulanan yang dikonfirmasi adalah IDR 48260000' in txt:
-                self.salary_overrides[uid] = 48260000.0
-                # User still has remaining confirmed base salary despite one household source ending
-                self.terminated_users.discard(uid)
-            elif 'first salary will be EUR 1661' in txt or 'first salary will be EUR 1,661' in txt:
-                self.salary_overrides[uid] = 1661.0
-            elif 'Regular salary of EUR 2717 resumes' in txt:
-                self.salary_overrides[uid] = 2717.0
-            elif 'first salary will be INR 214000' in txt:
-                self.salary_overrides[uid] = 214000.0
-            elif 'first salary from the new employer is ZAR 53680' in txt:
-                self.salary_overrides[uid] = 53680.0
-            elif 'first salary of ZAR 38280 is scheduled' in txt:
-                self.salary_overrides[uid] = 38280.0
-            elif 'first salary of EUR 968 is scheduled' in txt:
-                self.salary_overrides[uid] = 968.0
-            elif 'regular salary for the next payroll is INR 103000' in txt:
-                self.salary_overrides[uid] = 103000.0
-            elif 'salary of USD 1680 is confirmed' in txt:
-                self.salary_overrides[uid] = 1680.0
-            elif 'salary of EUR 1485 is confirmed' in txt:
-                self.salary_overrides[uid] = 1485.0
-            elif 'next salary is reduced to USD 702' in txt:
-                self.salary_overrides[uid] = 702.0
-            elif 'temporary monthly pay is EUR 1528.56' in txt:
-                self.salary_overrides[uid] = 1528.56
-            elif 'confirmed base salary is USD 1548' in txt:
-                self.salary_overrides[uid] = 1548.0
+            # 2. Confirmed authoritative salary amount overrides
+            phrases = [
+                r'reduced to (?:EUR|USD|INR|ZAR|IDR)\s*([\d,]+(?:\.\d+)?)',
+                r'naik menjadi (?:EUR|USD|INR|ZAR|IDR)\s*([\d,]+(?:\.\d+)?)',
+                r'gaji pokok yang dikonfirmasi adalah (?:EUR|USD|INR|ZAR|IDR)\s*([\d,]+(?:\.\d+)?)',
+                r'sisa gaji bulanan yang dikonfirmasi adalah (?:EUR|USD|INR|ZAR|IDR)\s*([\d,]+(?:\.\d+)?)',
+                r'first salary (?:will be|from the new employer is|of) (?:EUR|USD|INR|ZAR|IDR)\s*([\d,]+(?:\.\d+)?)',
+                r'gaji pertama anda sebesar (?:EUR|USD|INR|ZAR|IDR)\s*([\d,]+(?:\.\d+)?)',
+                r'regular salary (?:of|for the next payroll is) (?:EUR|USD|INR|ZAR|IDR)\s*([\d,]+(?:\.\d+)?)',
+                r'salary of (?:EUR|USD|INR|ZAR|IDR)\s*([\d,]+(?:\.\d+)?) is confirmed',
+                r'next salary is reduced to (?:EUR|USD|INR|ZAR|IDR)\s*([\d,]+(?:\.\d+)?)',
+                r'temporary monthly pay is (?:EUR|USD|INR|ZAR|IDR)\s*([\d,]+(?:\.\d+)?)',
+                r'confirmed base salary is (?:EUR|USD|INR|ZAR|IDR)\s*([\d,]+(?:\.\d+)?)',
+                r'remaining confirmed monthly salary is (?:EUR|USD|INR|ZAR|IDR)\s*([\d,]+(?:\.\d+)?)',
+            ]
+            for pat in phrases:
+                match = re.search(pat, txt, re.IGNORECASE)
+                if match:
+                    raw_num = match.group(1).replace(',', '')
+                    self.salary_overrides[uid] = float(raw_num)
+                    # Confirmed remaining base salary overrides any household termination
+                    self.terminated_users.discard(uid)
+                    break
+
+            # 3. Authoritative payroll date amendment messages (generic pattern)
+            date_match = re.search(r'\b(20\d{2}-\d{2}-\d{2})\b', txt)
+            if date_match and (
+                'replaces the payroll date' in txt_lower
+                or 'menggantikan tanggal penggajian' in txt_lower
+                or 'confirmed salary is now expected on' in txt_lower
+                or 'confirmed credit date is' in txt_lower
+                or 'tanggal kredit yang dikonfirmasi adalah' in txt_lower
+                or 'scheduled for' in txt_lower
+                or 'dijadwalkan pada' in txt_lower
+                or 'is confirmed for' in txt_lower
+            ):
+                d_str = date_match.group(1)
+                try:
+                    dt = datetime.strptime(d_str, "%Y-%m-%d")
+                    self.pay_day_overrides[uid] = dt.day
+                except Exception:
+                    pass
 
     def has_future_confirmed_income(self, user_id: str, user_events: pd.DataFrame) -> bool:
         """
@@ -149,13 +161,26 @@ class ConfirmedIncomeForecaster:
     ) -> Optional[RecurringIncomeSchedule]:
         """
         Detect recurring salary cadence (weekly, biweekly, monthly) and amount.
-        Returns None if user employment has ended or income is unsupported.
+        Follows general 4-tier precedence:
+        1. Authoritative payroll amendment message
+        2. Confirmed future scheduled salary event
+        3. Newer settled salary event
+        4. Historical recurring salary cadence
         """
         if not self.has_future_confirmed_income(user_id, user_events):
             return None
 
         override_amt = self.salary_overrides.get(user_id)
+        override_day = self.pay_day_overrides.get(user_id)
         req_d = str(request_date)[:10]
+
+        # Scheduled salary on or after request date
+        sched_sal = user_events[
+            (user_events['category'] == 'salary')
+            & (user_events['status'] == 'scheduled')
+            & (user_events['direction'] == 'credit')
+            & (user_events['settlement_date'] >= req_d)
+        ]
 
         # Settle history before request_date
         hist_sal = user_events[
@@ -173,21 +198,16 @@ class ConfirmedIncomeForecaster:
                 hist_sal = base_sal
 
         if hist_sal.empty:
-            # Check for scheduled salary on or after request_date
-            sched_sal = user_events[
-                (user_events['category'] == 'salary')
-                & (user_events['status'] == 'scheduled')
-                & (user_events['direction'] == 'credit')
-                & (user_events['settlement_date'] >= req_d)
-            ]
             if not sched_sal.empty:
                 s_row = sched_sal.iloc[0]
                 s_date = datetime.strptime(str(s_row['settlement_date'])[:10], "%Y-%m-%d")
-                amt = override_amt if override_amt is not None else float(s_row['home_amount'])
+                s_col = 'home_amount' if 'home_amount' in s_row else 'amount'
+                amt = override_amt if override_amt is not None else float(s_row[s_col])
+                day = override_day if override_day is not None else s_date.day
                 return RecurringIncomeSchedule(
                     cadence='monthly',
                     amount=amt,
-                    day_of_month=s_date.day,
+                    day_of_month=day,
                 )
             return None
 
@@ -197,11 +217,15 @@ class ConfirmedIncomeForecaster:
         diffs = settle_dates.diff().dt.days.dropna()
         median_interval = float(diffs.median()) if not diffs.empty else 30.0
 
-        # Amount determination
+        # Amount determination: Tier 1 override -> Tier 2 scheduled confirmed -> Tier 3 historical median
         if override_amt is not None:
             amt = override_amt
+        elif not sched_sal.empty and any('prorated' in str(d).lower() for d in hist_sal['description']):
+            s_col = 'home_amount' if 'home_amount' in sched_sal.columns else 'amount'
+            amt = float(sched_sal.iloc[0][s_col])
         else:
-            amts = hist_sal['home_amount'].dropna()
+            col = 'home_amount' if 'home_amount' in hist_sal.columns else 'amount'
+            amts = hist_sal[col].dropna()
             amt = float(amts.median()) if not amts.empty else 0.0
 
         # Weekly cadence (5 to 9 days interval)
@@ -211,7 +235,6 @@ class ConfirmedIncomeForecaster:
                 cadence='weekly',
                 amount=amt,
                 day_of_week=last_date.dayofweek,
-                anchor_date=str(last_date)[:10],
             )
 
         # Biweekly cadence (12 to 16 days interval)
@@ -224,7 +247,21 @@ class ConfirmedIncomeForecaster:
             )
 
         # Monthly cadence (default)
-        typ_day = int(settle_dates.dt.day.mode().iloc[0])
+        # Precedence for pay day:
+        # Tier 1: Authoritative message date override
+        # Tier 2: Confirmed scheduled salary event day
+        # Tier 3: Newer settled salary date if shifted
+        # Tier 4: Mode of historical pay days
+        if override_day is not None:
+            typ_day = override_day
+        elif not sched_sal.empty:
+            s_date = datetime.strptime(str(sched_sal.iloc[0]['settlement_date'])[:10], "%Y-%m-%d")
+            typ_day = s_date.day
+        elif len(settle_dates) >= 2 and settle_dates.iloc[-1].day == settle_dates.iloc[-2].day:
+            typ_day = int(settle_dates.iloc[-1].day)
+        else:
+            typ_day = int(settle_dates.dt.day.mode().iloc[0])
+
         return RecurringIncomeSchedule(
             cadence='monthly',
             amount=amt,

@@ -1,122 +1,79 @@
-"""
-Forensic trace script for:
-- request_13 day-by-day table
-- request_06 missing 17.10 reserve
-- request_11 underestimating 599,355 reserve
-- request_19 partial payment comparison (is it max safe or payment option?)
-- request_07 earliest date 2024-10-23 vs 2024-10-15
-- requests 20, 24, 25 reserve component analysis
-- Diagnostic table
-"""
-
 import sys
+sys.path.insert(0, '.')
 import os
-sys.path.insert(0, os.path.abspath('.'))
-
 import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-
 from code.forecasting import (
     EventNormalizer,
     ExchangeRateProvider,
+    ImageAmountResolver,
     ConfirmedIncomeForecaster,
     ExpenseForecaster,
-    DailyCashFlowSimulator
+)
+from code.optimization import DecisionEngine
+from code.optimization.payment_optimizer import Payment
+
+dataset_dir = 'dataset'
+profiles_df = pd.read_csv(os.path.join(dataset_dir, 'financial_profiles.csv'))
+events_df = pd.read_csv(os.path.join(dataset_dir, 'financial_events.csv'))
+rates_df = pd.read_csv(os.path.join(dataset_dir, 'exchange_rates.csv'))
+sample_requests_df = pd.read_csv(os.path.join(dataset_dir, 'sample_requests.csv'))
+options_df = pd.read_csv(os.path.join(dataset_dir, 'request_payment_options.csv'))
+messages_df = pd.read_csv(os.path.join(dataset_dir, 'messages.csv'))
+images_df = pd.read_csv(os.path.join(dataset_dir, 'images.csv'))
+
+fx_provider = ExchangeRateProvider(rates_df)
+image_resolver = ImageAmountResolver(images_df)
+normalizer = EventNormalizer(events_df, images_df, fx_provider)
+income_fc = ConfirmedIncomeForecaster(messages_df)
+expense_fc = ExpenseForecaster(messages_df)
+
+engine = DecisionEngine(
+    event_normalizer=normalizer,
+    income_forecaster=income_fc,
+    expense_forecaster=expense_fc,
+    variable_spending_stat='median',
 )
 
-profiles = pd.read_csv('dataset/financial_profiles.csv')
-events = pd.read_csv('dataset/financial_events.csv')
-rates = pd.read_csv('dataset/exchange_rates.csv')
-sample_requests = pd.read_csv('dataset/sample_requests.csv')
-options = pd.read_csv('dataset/request_payment_options.csv')
-messages = pd.read_csv('dataset/messages.csv')
-images = pd.read_csv('dataset/images.csv')
+profile_map = {str(p['user_id']).strip(): p for _, p in profiles_df.iterrows()}
 
-fx = ExchangeRateProvider(rates)
-norm = EventNormalizer(events, images, fx)
-inc_f = ConfirmedIncomeForecaster(messages)
-exp_f = ExpenseForecaster()
+def trace_request(req_id):
+    gt = sample_requests_df[sample_requests_df['request_id'] == req_id].iloc[0]
+    uid = str(gt['user_id']).strip()
+    prof = profile_map[uid]
+    req_d = str(gt['request_date'])[:10]
+    req_amt = float(gt['requested_amount'])
+    curr_bal = float(prof['current_available_balance'])
+    min_bal = float(prof['minimum_balance_to_keep'])
+    home_curr = str(prof['home_currency']).strip()
 
-print("=" * 80)
-print("PART 1: REQUEST_13 DAY-BY-DAY FORENSIC TRACE")
-print("=" * 80)
+    ue = normalizer.get_user_events(uid, home_curr, req_d)
+    base = engine.evaluator.build_baseline_cashflows(uid, ue, curr_bal, min_bal, req_d)
+    sim = engine.simulator.simulate(uid, ue, curr_bal, min_bal, req_amt, req_d)
 
-u13_prof = profiles[profiles['user_id'] == 'user_13'].iloc[0]
-u13_events = norm.get_user_events('user_13', 'EUR', '2024-03-07')
+    print(f"\n==================================================")
+    print(f"TRACE FOR {req_id} (user {uid})")
+    print(f"Requested: {req_amt} {home_curr} on {req_d}")
+    print(f"Current Bal: {curr_bal} | Min Bal: {min_bal}")
+    print(f"Sim amount_safe_to_pay today: {sim.amount_safe_to_pay} (GT: {gt['amount_safe_to_pay']})")
+    print(f"Sim min_balance in 90d: {sim.minimum_balance} on {sim.projected_minimum_balance_date}")
+    print(f"Daily var rate: {base.daily_var_rate}")
+    print(f"Salary: {base.salary_schedule}")
+    print(f"Recurring commitments: {base.recurring_commitments}")
 
-# Detailed inspection of request_13
-curr_bal = float(u13_prof['current_available_balance'])
-min_bal = float(u13_prof['minimum_balance_to_keep'])
-req_d_str = '2024-03-07'
-req_d = datetime.strptime(req_d_str, "%Y-%m-%d")
+    sp_plans = engine.spending_optimizer.get_candidate_plans(uid, prof, ue, req_d)
+    print(f"Spending plans count: {len(sp_plans)}")
+    for i, sp in enumerate(sp_plans):
+        print(f"  Plan {i}: {sp.spec_string} (count={sp.count}, savings={sp.total_monthly_savings})")
+        # Test full payment today with this sp
+        safe_full, min_b, min_b_d = engine.evaluator.is_plan_safe(base, [Payment(req_d, req_amt)], spending_changes=sp)
+        print(f"    -> Full payment safe: {safe_full}, min_bal={min_b:.2f} on {min_b_d}")
 
-# Let's inspect all events of user 13 around this period
-pending_total, _ = exp_f.get_pending_debits_total(u13_events, req_d_str)
-sched_incomes = inc_f.get_future_scheduled_income(u13_events, req_d_str)
-sched_income_map = {s_date: amt for s_date, amt in sched_incomes}
-sched_debits = exp_f.get_future_scheduled_debits(u13_events, req_d_str)
-sched_debit_map = {}
-for _, s_date, amt, cat in sched_debits:
-    sched_debit_map[s_date] = sched_debit_map.get(s_date, 0.0) + amt
+    # Evaluate complete decision
+    res = engine.evaluate_request(gt, prof, options_df)
+    print(f"Decision: status={res.affordability_status}, method={res.recommended_payment_method}")
+    print(f"  earliest_date={res.earliest_date_for_full_payment}")
+    print(f"  spending_changes={res.spending_changes_needed}")
+    print(f"  plan={res.payment_plan}")
 
-recs = exp_f.get_recurring_commitments('user_13', u13_events, req_d_str)
-var_stats = exp_f.get_variable_essential_stats(u13_events, req_d_str)
-daily_var = var_stats['median'] / 7.0
-
-# Print simulation table
-print(f"Initial available balance: {curr_bal:.2f} | Minimum balance to keep: {min_bal:.2f}")
-print(f"Daily variable essential rate: {daily_var:.2f} EUR/day")
-print("Recurring commitments detected by base ExpenseForecaster:")
-for cat, rc in recs.items():
-    print(f"  {cat}: {rc.amount:.2f} EUR (cadence={rc.cadence}, day={rc.day_of_month})")
-
-print("\nScheduled events:")
-for s_date, amt in sched_income_map.items():
-    print(f"  Scheduled income on {s_date}: +{amt:.2f}")
-for s_date, amt in sched_debit_map.items():
-    print(f"  Scheduled debit on {s_date}: -{amt:.2f}")
-
-print("\nDAY-BY-DAY CASH FLOW (from 2024-03-07 to 2024-05-15):")
-print(f"{'Date':<10} | {'Opening':<9} | {'ConfInc':<8} | {'SchedInc':<8} | {'RecExp':<8} | {'VarEss':<7} | {'Closing':<9} | {'MinBal':<7} | {'LowestSoFar':<11}")
-print("-" * 95)
-
-cur_b = curr_bal - pending_total
-lowest_b = cur_b
-target_end_d = datetime(2024, 5, 16)
-num_days = (target_end_d - req_d).days
-
-for d in range(num_days):
-    cur_dt = req_d + timedelta(days=d)
-    d_str = cur_dt.strftime("%Y-%m-%d")
-    open_b = cur_b
-    conf_inc = 0.0
-    sched_inc = 0.0
-    rec_exp = 0.0
-    var_ess = daily_var
-
-    if d_str in sched_income_map:
-        sched_inc += sched_income_map[d_str]
-    elif cur_dt.day == 15 and cur_dt.month > 3:  # recurring monthly salary on 15th
-        conf_inc += 1343.54
-
-    if d_str in sched_debit_map:
-        rec_exp += sched_debit_map[d_str]
-
-    for cat, rc in recs.items():
-        if rc.cadence == 'monthly' and cur_dt.day == rc.day_of_month:
-            rec_exp += rc.amount
-
-    closing_b = open_b + conf_inc + sched_inc - rec_exp - var_ess
-    cur_b = closing_b
-    if cur_b < lowest_b:
-        lowest_b = cur_b
-
-    # Print interesting days
-    if d < 10 or cur_dt.day in [14, 15, 16, 1, 2] or cur_dt >= datetime(2024, 5, 10):
-        print(f"{d_str:<10} | {open_b:9.2f} | {conf_inc:8.2f} | {sched_inc:8.2f} | {rec_exp:8.2f} | {var_ess:7.2f} | {closing_b:9.2f} | {min_bal:7.2f} | {lowest_b:11.2f}")
-
-print(f"\nLowest balance before May 15 paycheck: {lowest_b:.2f}")
-print(f"Headroom above minimum balance {min_bal:.2f}: {lowest_b - min_bal:.2f}")
-print(f"Ground truth safe amount: 433.40 EUR")
-print(f"Difference: {(lowest_b - min_bal) - 433.40:.2f} EUR")
+for r in ['request_06', 'request_11', 'request_07', 'request_13', 'request_21']:
+    trace_request(r)

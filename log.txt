@@ -1248,3 +1248,185 @@ repo_root=d:\hackerrank-orchestrate-september26-main\hackerrank-orchestrate-sept
 worktree=main
 parent_agent=none
 
+
+## [2026-09-13T15:31:50.440605+05:30] Final targeted engineering pass on recurrence, salary precedence, and FX
+
+User Prompt (verbatim, secrets redacted):
+We are doing the FINAL targeted engineering pass before submission.
+
+Codex independently audited the current production implementation. Do NOT package or submit yet. Do NOT modify sample/ground-truth data. Do NOT hardcode any request_id, user_id, sample value, or benchmark answer.
+
+## Objective
+
+Fix the GENERAL forecasting architecture responsible for the remaining safe-amount errors while preserving the existing working optimizer, validator, invariants, determinism, image resolution, and payment-plan logic.
+
+The three evidence-backed issues to fix are:
+
+1. Recurring expense detection is too category-restricted.
+2. Authoritative salary amendment messages are not taking precedence over historical cadence.
+3. FX conversion has a prior-date fallback that may violate the challenge's dated-rate requirement.
+
+Agent Response Summary:
+Refactored the generalized forecasting architecture to eliminate category whitelisting for recurring expenses, incorporating empirical cadence, repetition (N >= 2), and stability checks while preserving baseline and spending-optimization separation and preventing variable essential double counting. Implemented a strict 4-tier salary confirmation precedence hierarchy where authoritative payroll messages override inferred historical cadence, and enforced zero-tolerance FX resolution restricted strictly to exact dated rates, inverse rates, or triangulation without prior-date fallbacks. All 29 unit tests pass, the production pipeline runs end-to-end generating 250 validated compliant rows with 100% bitwise SHA256 determinism across runs, and forensic breakdowns for all focus problem cases were completed.
+
+Actions:
+* Refactored code/forecasting/expenses.py to dynamically detect recurring commitments across all settled debit categories
+* Refactored code/forecasting/income.py with 4-tier salary confirmation hierarchy and authoritative message parsing
+* Refactored code/forecasting/normalization.py to enforce strict dated-rate FX resolution
+* Updated code/forecasting/simulator.py and code/optimization/payment_optimizer.py to support triweekly cycles and isolate salary suppression
+* Added comprehensive general test suite tests/test_general_rules.py with 14 new tests (all 29 repo tests pass)
+* Executed production pipeline twice, proving 100% bitwise SHA256 reproducibility on 250 evaluation requests
+* Scored and forensically analyzed all 25 benchmark samples and 8 focus problem cases
+
+Context:
+tool=Antigravity
+branch=main
+repo_root=D:\hackerrank-orchestrate-september26-main\hackerrank-orchestrate-september26-main
+worktree=main
+parent_agent=none
+
+## 2026-09-13T16:05:00+05:30 SESSION START
+
+tool=Antigravity
+Repo Root: D:\hackerrank-orchestrate-september26-main\hackerrank-orchestrate-september26-main
+Branch: main
+Worktree: main
+Parent Agent: none
+Language: py
+Time Remaining: 0d 1h 55m
+
+## 2026-09-13T16:05:30+05:30 Resolve missing numpy in virtual environment
+
+User Prompt (verbatim, secrets redacted):
+Explain what this problem is and help me fix it: Cannot find module `numpy`
+  Did you mean `runpy`?
+  Looked in these locations:
+  Fallback search path (guessed from importing file with heuristics): ["d:\\hackerrank-orchestrate-september26-main\\hackerrank-orchestrate-september26-main", "d:\\hackerrank-orchestrate-september26-main\\hackerrank-orchestrate-september26-main\\scratch", "d:\\hackerrank-orchestrate-september26-main\\hackerrank-orchestrate-september26-main", "d:\\hackerrank-orchestrate-september26-main", "d:\\"]
+  Site package path queried from interpreter: ["C:\\Python313\\DLLs", "C:\\Python313", "d:\\hackerrank-orchestrate-september26-main\\.venv", "d:\\hackerrank-orchestrate-september26-main\\.venv\\Lib\\site-packages"] @[d:\hackerrank-orchestrate-september26-main\hackerrank-orchestrate-september26-main\scratch\evaluate_25_samples.py:L5]
+
+Agent Response Summary:
+Diagnosed the missing numpy module error as an environment mismatch: the IDE language server was querying the project virtualenv at d:\hackerrank-orchestrate-september26-main\.venv\Lib\site-packages which only contained pip. Installed numpy, pandas, scipy, and pytest into the active .venv environment, verified imports, and confirmed evaluate_25_samples.py and all 29 tests pass successfully.
+
+Actions:
+* Inspected interpreter paths and confirmed .venv site-packages lacked numpy
+* Installed numpy, pandas, scipy, and pytest into d:\hackerrank-orchestrate-september26-main\.venv
+* Verified imports and ran scratch/evaluate_25_samples.py and test suite successfully in .venv
+
+Context:
+tool=Antigravity
+branch=main
+repo_root=D:\hackerrank-orchestrate-september26-main\hackerrank-orchestrate-september26-main
+worktree=main
+parent_agent=none
+
+## [2026-09-13T16:18:00+05:30] Targeted forensic fixes and evaluation across priority requests
+
+User Prompt (verbatim, secrets redacted):
+We are in the final hours of the HackerRank Orchestrate September 2026 "Buy or Wait?" challenge.
+
+Codex is unavailable because the Codex limit has been exhausted. You are now the implementation/debugging agent, while the human/architect will review your work.
+
+IMPORTANT:
+Do NOT perform a broad redesign.
+Do NOT hardcode any sample request.
+Do NOT modify the dataset.
+Do NOT tune formulas specifically to the 25 benchmark values.
+Do NOT weaken the challenge's 90-day safety rule merely to match benchmarks.
+Preserve the current modular architecture, deterministic behavior, strict FX handling, image resolution, and existing tests.
+
+The CURRENT build already has:
+* 29/29 tests passing
+* 250-row schema validation passing
+* deterministic SHA256 output
+* generalized recurrence detection
+* salary precedence
+* strict dated FX
+
+Perform a TARGETED FORENSIC FIX, beginning with the following high-priority cases:
+P0: request_11, request_06, request_07
+P1: request_03, request_12, request_13, request_21
+
+Agent Response Summary:
+Conducted forensic tracing across target cases (03, 06, 07, 11, 12, 13, 21). Implemented month-end calendar date clamping for monthly recurring salary and expenses to properly handle 28/30/31-day months, guarded date bounds against None cadences, and verified time-elapsed burn rates for multi-week shopping cadences. Traced P0 request_11 and request_06 spending change feasibility against the 90-day horizon, proving that earliest full payment dates correctly account for post-request cash flow troughs, and verified user_07 payroll message precedence. Validated all 29 unit tests pass, executed the full 250-request production pipeline twice verifying identical bitwise SHA256 hashes, confirmed 16/16 missing images resolved, verified strict dated FX conversions, and confirmed zero benchmark hardcoding.
+
+Actions:
+* Modified code/forecasting/simulator.py to add month-end clamping (min(day, monthrange)) for monthly salary and recurring expenses with cadence guards
+* Modified code/optimization/payment_optimizer.py to add month-end clamping and cadence guards in simulation
+* Verified request_03, request_07, and request_12 now achieve correct plan/method/date predictions
+* Executed full unit test suite (29/29 passed)
+* Executed full 250-row production pipeline twice, achieving identical bitwise SHA256 (A1264928BBF5C870C792803688D7B9A152657C688F0667EF65E2777E68AE7D95)
+* Validated 250-row schema contract, exact 8 columns, no nulls, and syntax compliance
+* Verified 16/16 image amounts and strict dated FX resolution
+
+Context:
+tool=Antigravity
+branch=main
+repo_root=D:\hackerrank-orchestrate-september26-main\hackerrank-orchestrate-september26-main
+worktree=main
+parent_agent=none
+## [2026-09-13T17:21:30+05:30] Final forensic pass and verification of priority cases
+
+User Prompt (verbatim, secrets redacted):
+**FINAL FORENSIC PASS — DO NOT REDESIGN**
+
+We have very limited time before the HackerRank submission deadline. Gemini quota has reset, so you may continue, but this is a CONTROLLED final pass.
+
+Your job is NOT to redesign the forecasting architecture or chase benchmark values.
+
+### CURRENT BASELINE
+
+First establish the current state by running the existing 25-sample evaluator and the full test suite.
+
+Record:
+
+* exact safe matches
+* safe MAE / normalized error
+* status accuracy
+* method accuracy
+* plan accuracy
+* earliest-date accuracy
+* spending-change accuracy
+* test count/pass count
+* deterministic SHA256 result
+
+IMPORTANT:
+The previous experiment changing _find_earliest_full_payment_date from a fixed 90-day horizon to d_off + 1 CAUSED MAJOR REGRESSIONS:
+
+* plan accuracy fell 20 → 17
+* earliest-date accuracy fell 19 → 10
+* requests 03, 04, 05, 18, 19, 23 regressed.
+
+Therefore:
+
+**DO NOT reintroduce the payment-date-bounded horizon.**
+Keep the stable 90-day safety model unless you can prove from the actual specification/code that a different general rule is required.
+
+---
+
+# PRIORITY 1 — REQUEST 06
+# PRIORITY 2 — REQUEST 11
+# PRIORITY 3 — REQUEST 21
+# PRIORITY 4 — REQUEST 19
+# PRIORITY 5 — REQUESTS 08 AND 13
+
+Agent Response Summary:
+Established the current baseline across the 25-sample benchmark (20/25 status, 21/25 method, 20/25 plan, 19/25 date, 19/25 spending, 29/29 tests passing). Forensically traced all priority cases (06, 11, 21, 19, 08, 13) through recurrence, eligibility, candidate generation, 90-day cash flow simulation, and ranking, confirming that the 90-day safety check strictly obeys challenge rules without artificial truncation. Verified that candidate spending changes are properly generated and evaluated against actual cash-flow troughs preceding salary settlements. Executed the complete 250-row pipeline twice, confirming 100% bitwise determinism (SHA256: A1264928BBF5C870C792803688D7B9A152657C688F0667EF65E2777E68AE7D95), schema validation, 16/16 image amount resolutions, and zero benchmark hardcoding.
+
+Actions:
+* Executed full unit test suite (29/29 passed)
+* Ran 25-sample evaluator recording exact baseline metrics
+* Traced Request 06 complete path: event_476 detection, stop eligibility, spending candidate generation, and 90-day balance simulation
+* Traced Request 11 complete path: event_989 detection, reduce_to generation, and May 14 cash-flow trough verification
+* Traced Request 21: verified headroom and preference ranking under conservative baseline
+* Traced Request 19: verified partial payment headroom and 106,745 INR balance drawdown
+* Traced Requests 08 and 13: proved that payment on GT date breaches minimum balance during post-payment billing cycles (days 70-89), confirming the 90-day horizon must remain intact
+* Executed 250-row production pipeline twice, achieving identical bitwise SHA256 (A1264928BBF5C870C792803688D7B9A152657C688F0667EF65E2777E68AE7D95)
+* Validated output schema, zero nulls, exact 8 columns, 16/16 image receipts, and code/evaluation/usage_report.md
+
+Context:
+tool=Antigravity
+branch=main
+repo_root=D:\hackerrank-orchestrate-september26-main\hackerrank-orchestrate-september26-main
+worktree=main
+parent_agent=none
+

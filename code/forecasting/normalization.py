@@ -88,35 +88,12 @@ class ExchangeRateProvider:
                     match_type='triangulated'
                 )
 
-        # 4. Fallback to closest prior dated rate for future/unlisted dates
-        sub = self.df[
-            (self.df['from_currency'] == from_curr) & 
-            (self.df['to_currency'] == to_curr)
-        ]
-        if not sub.empty:
-            priors = sub[sub['rate_date'] <= date_str]
-            chosen = priors.iloc[-1] if not priors.empty else sub.iloc[0]
-            return RateResolution(
-                rate=float(chosen['rate']),
-                effective_date=str(chosen['rate_date']),
-                match_type='prior_dated'
-            )
+        # 4. Strict failure: No silent fallback to older/prior dates allowed per challenge rules
+        raise ValueError(
+            f"No exact dated exchange rate path found between {from_curr} and {to_curr} on date {date_str}. "
+            f"Per challenge rules §6.1, cash events must use the exact row for their settlement date."
+        )
 
-        # 5. Prior dated inverse
-        inv_sub = self.df[
-            (self.df['from_currency'] == to_curr) & 
-            (self.df['to_currency'] == from_curr)
-        ]
-        if not inv_sub.empty:
-            inv_priors = inv_sub[inv_sub['rate_date'] <= date_str]
-            chosen = inv_priors.iloc[-1] if not inv_priors.empty else inv_sub.iloc[0]
-            return RateResolution(
-                rate=1.0 / float(chosen['rate']),
-                effective_date=str(chosen['rate_date']),
-                match_type='prior_dated_inverse'
-            )
-
-        raise ValueError(f"No exchange rate path found between {from_curr} and {to_curr} for date {date_str}")
 
     def get_rate(self, rate_date: str, from_curr: str, to_curr: str) -> float:
         """Return the scalar conversion rate."""

@@ -10,7 +10,7 @@ Handles:
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 import pandas as pd
 import numpy as np
 
@@ -108,8 +108,9 @@ class ExpenseForecaster:
         request_date: str,
     ) -> Dict[str, RecurringExpense]:
         """
-        Detect cadence (weekly, biweekly, monthly) and amount for fixed expense commitments.
-        Uses date spacing and amount stability to avoid inferring spurious recurrence.
+        Detect cadence (weekly, biweekly, triweekly, monthly) and amount for recurring commitments
+        across all non-variable debit categories based on empirical transaction history.
+        Uses date spacing regularity and amount stability to avoid spurious recurrence.
         """
         req_d = str(request_date)[:10]
         hist = user_events[
@@ -119,7 +120,10 @@ class ExpenseForecaster:
         ].copy()
 
         commitments = {}
-        for cat in self.FIXED_CATEGORIES:
+        # Evaluate all debit categories present in historical settled events (except pure variable groceries)
+        candidate_cats = [c for c in hist['category'].unique() if c != 'groceries']
+
+        for cat in candidate_cats:
             c_events = hist[hist['category'] == cat].sort_values('settlement_date')
             if len(c_events) < 2:
                 continue
@@ -129,9 +133,11 @@ class ExpenseForecaster:
             if diffs.empty:
                 continue
             med_diff = float(diffs.median())
+            std_diff = float(diffs.std()) if len(diffs) > 1 else 0.0
 
             # Amount stability
-            amts = c_events['home_amount'].dropna()
+            amt_col = 'home_amount' if 'home_amount' in c_events.columns else 'amount'
+            amts = c_events[amt_col].dropna()
             if amts.empty:
                 continue
             amt = float(amts.median())
@@ -140,8 +146,13 @@ class ExpenseForecaster:
             if user_id in self.rent_multipliers and cat == 'rent':
                 amt *= self.rent_multipliers[user_id]
 
-            # Weekly cadence (5-9 days)
-            if 5.0 <= med_diff <= 9.0:
+            m_diff = med_diff
+            s_diff = std_diff
+            dow_n = settle_dates.dt.dayofweek.nunique()
+            dom_n = settle_dates.dt.day.nunique()
+
+            # Weekly cadence (6.5 to 7.5 days, std <= 1.0, consistent day of week)
+            if 6.5 <= m_diff <= 7.5 and s_diff <= 1.0 and dow_n <= 2:
                 last_d = settle_dates.iloc[-1]
                 commitments[cat] = RecurringExpense(
                     category=cat,
@@ -151,8 +162,8 @@ class ExpenseForecaster:
                     anchor_date=str(last_d)[:10],
                     flexibility=flex,
                 )
-            # Biweekly cadence (12-16 days)
-            elif 12.0 <= med_diff <= 16.0:
+            # Biweekly cadence (13.0 to 15.0 days, std <= 1.0, consistent day of week)
+            elif 13.0 <= m_diff <= 15.0 and s_diff <= 1.0 and dow_n <= 2:
                 last_d = settle_dates.iloc[-1]
                 commitments[cat] = RecurringExpense(
                     category=cat,
@@ -161,18 +172,18 @@ class ExpenseForecaster:
                     anchor_date=str(last_d)[:10],
                     flexibility=flex,
                 )
-            # Monthly cadence (25-35 days)
-            elif 25.0 <= med_diff <= 35.0:
-                typ_day = int(settle_dates.dt.day.mode().iloc[0])
+            # Triweekly cadence (20.0 to 22.0 days, std <= 1.0, consistent day of week)
+            elif 20.0 <= m_diff <= 22.0 and s_diff <= 1.0 and dow_n <= 2:
+                last_d = settle_dates.iloc[-1]
                 commitments[cat] = RecurringExpense(
                     category=cat,
-                    cadence='monthly',
+                    cadence='triweekly',
                     amount=amt,
-                    day_of_month=typ_day,
+                    anchor_date=str(last_d)[:10],
                     flexibility=flex,
                 )
-            # If >= 3 events and fairly regular monthly day
-            elif len(c_events) >= 3 and settle_dates.dt.day.nunique() <= 2:
+            # Monthly cadence (28.0 to 31.5 days or consistent day of month)
+            elif (28.0 <= m_diff <= 31.5 and s_diff <= 1.5) or (len(c_events) >= 3 and dom_n <= 2):
                 typ_day = int(settle_dates.dt.day.mode().iloc[0])
                 commitments[cat] = RecurringExpense(
                     category=cat,
@@ -189,46 +200,61 @@ class ExpenseForecaster:
         user_events: pd.DataFrame,
         request_date: str,
         lookback_days: int = 180,
+        exclude_categories: Optional[Set[str]] = None,
     ) -> Dict[str, float]:
         """
-        Aggregate historical essential spending (groceries + transport) by calendar week.
-        Returns true distribution statistics over weekly totals: mean, median, q75, q90.
+        Aggregate historical essential spending (groceries + transport) over the lookback window.
+        Excludes categories that are already modeled as discrete recurring commitments to prevent double-counting.
+        Accounts for periodic / multi-week cycles so missing weeks do not artificially inflate the burn rate.
         """
         req_d = datetime.strptime(str(request_date)[:10], "%Y-%m-%d")
         cutoff_date = (req_d - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
         req_d_str = req_d.strftime("%Y-%m-%d")
+
+        active_categories = [
+            c for c in self.VARIABLE_ESSENTIAL_CATEGORIES
+            if not exclude_categories or c not in exclude_categories
+        ]
+        if not active_categories:
+            return {'mean': 0.0, 'median': 0.0, 'q75': 0.0, 'q90': 0.0, 'weeks_count': 0}
 
         hist = user_events[
             (user_events['status'] == 'settled')
             & (user_events['direction'] == 'debit')
             & (user_events['settlement_date'] >= cutoff_date)
             & (user_events['settlement_date'] < req_d_str)
-            & (user_events['category'].isin(self.VARIABLE_ESSENTIAL_CATEGORIES))
+            & (user_events['category'].isin(active_categories))
         ].copy()
 
         if hist.empty:
-            # Fallback without lookback cutoff if insufficient data
             hist = user_events[
                 (user_events['status'] == 'settled')
                 & (user_events['direction'] == 'debit')
                 & (user_events['settlement_date'] < req_d_str)
-                & (user_events['category'].isin(self.VARIABLE_ESSENTIAL_CATEGORIES))
+                & (user_events['category'].isin(active_categories))
             ].copy()
 
         if hist.empty:
             return {'mean': 0.0, 'median': 0.0, 'q75': 0.0, 'q90': 0.0, 'weeks_count': 0}
 
-        # Group by calendar week
-        hist['week'] = pd.to_datetime(hist['settlement_date']).dt.to_period('W')
-        weekly_totals = hist.groupby('week')['home_amount'].sum()
+        amt_col = 'home_amount' if 'home_amount' in hist.columns else 'amount'
+        earliest_dt = pd.to_datetime(hist['settlement_date'].min())
+        elapsed_days = max(7, (req_d - earliest_dt).days)
+        tot_amt = float(hist[amt_col].sum())
 
-        if len(weekly_totals) < 2:
-            single_val = float(weekly_totals.iloc[0]) if not weekly_totals.empty else 0.0
-            return {'mean': single_val, 'median': single_val, 'q75': single_val, 'q90': single_val, 'weeks_count': len(weekly_totals)}
+        # Group by calendar week and reindex over all elapsed weeks to represent zero weeks
+        hist['week'] = pd.to_datetime(hist['settlement_date']).dt.to_period('W')
+        all_weeks = pd.period_range(start=hist['week'].min(), end=pd.to_datetime(req_d_str).to_period('W'), freq='W')
+        weekly_totals = hist.groupby('week')[amt_col].sum().reindex(all_weeks, fill_value=0.0)
+
+        mean_val = tot_amt / (elapsed_days / 7.0)
+        median_val = float(weekly_totals.median())
+        if median_val <= 0.0:
+            median_val = mean_val
 
         return {
-            'mean': float(weekly_totals.mean()),
-            'median': float(weekly_totals.median()),
+            'mean': mean_val,
+            'median': mean_val,
             'q75': float(weekly_totals.quantile(0.75)),
             'q90': float(weekly_totals.quantile(0.90)),
             'weeks_count': len(weekly_totals),
