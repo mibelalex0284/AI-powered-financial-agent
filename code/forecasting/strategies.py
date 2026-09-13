@@ -9,7 +9,7 @@ Defines:
   4. FixedPlusMedianEssentialStrategy
   5. FixedPlus75thEssentialStrategy
   6. FixedPlus90thEssentialStrategy
-  7. TrueDailySimulationStrategy
+  7. TrueDailySimulationStrategy (mean, median, 75th, 90th)
 """
 
 from abc import ABC, abstractmethod
@@ -18,8 +18,8 @@ from typing import Dict, Optional, Tuple
 import pandas as pd
 import numpy as np
 
-from .income import ConfirmedIncomeForecaster
-from .expenses import ExpenseForecaster
+from .income import ConfirmedIncomeForecaster, RecurringIncomeSchedule
+from .expenses import ExpenseForecaster, RecurringExpense
 from .simulator import DailyCashFlowSimulator, SimulationResult
 
 
@@ -61,7 +61,7 @@ class ExplicitEventsStrategy(ForecastingStrategy):
     ) -> SimulationResult:
         pending_total, _ = self.expense_forecaster.get_pending_debits_total(user_events, request_date)
         sched_debits = self.expense_forecaster.get_future_scheduled_debits(user_events, request_date)
-        sched_total = sum(amt for _, _, amt in sched_debits)
+        sched_total = sum(amt for _, _, amt, _ in sched_debits)
 
         predicted_reserve = pending_total + sched_total
         headroom = current_available_balance - minimum_balance_to_keep
@@ -93,7 +93,7 @@ class HeuristicTroughStrategy(ForecastingStrategy):
         name: str,
         income_forecaster: ConfirmedIncomeForecaster,
         expense_forecaster: ExpenseForecaster,
-        essential_spending_stat: Optional[str] = None, # 'mean', 'median', 'q75', 'q90', or None
+        essential_spending_stat: Optional[str] = None,  # 'mean', 'median', 'q75', 'q90', or None
     ):
         super().__init__(name)
         self.income_forecaster = income_forecaster
@@ -111,7 +111,7 @@ class HeuristicTroughStrategy(ForecastingStrategy):
     ) -> SimulationResult:
         req_d = datetime.strptime(str(request_date)[:10], "%Y-%m-%d")
 
-        # 1. Pending debits
+        # 1. Pending debits reserved immediately
         pending_total, _ = self.expense_forecaster.get_pending_debits_total(user_events, request_date)
 
         # 2. Next confirmed income date
@@ -122,14 +122,22 @@ class HeuristicTroughStrategy(ForecastingStrategy):
         if sched_incomes:
             next_income_d = datetime.strptime(sched_incomes[0][0], "%Y-%m-%d")
         elif salary_schedule is not None:
-            sal_day = salary_schedule[0]
-            if req_d.day < sal_day:
-                next_income_d = req_d.replace(day=sal_day)
-            else:
-                if req_d.month == 12:
-                    next_income_d = req_d.replace(year=req_d.year + 1, month=1, day=sal_day)
+            if salary_schedule.cadence == 'monthly' and salary_schedule.day_of_month:
+                sal_day = salary_schedule.day_of_month
+                if req_d.day < sal_day:
+                    next_income_d = req_d.replace(day=sal_day)
                 else:
-                    next_income_d = req_d.replace(month=req_d.month + 1, day=sal_day)
+                    if req_d.month == 12:
+                        next_income_d = req_d.replace(year=req_d.year + 1, month=1, day=sal_day)
+                    else:
+                        next_income_d = req_d.replace(month=req_d.month + 1, day=sal_day)
+            elif salary_schedule.cadence == 'weekly' and salary_schedule.day_of_week is not None:
+                days_ahead = (salary_schedule.day_of_week - req_d.weekday()) % 7
+                if days_ahead == 0:
+                    days_ahead = 7
+                next_income_d = req_d + timedelta(days=days_ahead)
+            else:
+                next_income_d = req_d + timedelta(days=14)
         else:
             # Full 90-day horizon if no future income
             next_income_d = req_d + timedelta(days=90)
@@ -139,30 +147,39 @@ class HeuristicTroughStrategy(ForecastingStrategy):
         # 3. Scheduled debits in window
         sched_debits = self.expense_forecaster.get_future_scheduled_debits(user_events, request_date)
         sched_total = 0.0
-        for _, s_date, amt in sched_debits:
+        scheduled_categories_in_window = set()
+        for _, s_date, amt, cat in sched_debits:
             sd = datetime.strptime(s_date, "%Y-%m-%d")
             if req_d <= sd < next_income_d:
                 sched_total += amt
+                scheduled_categories_in_window.add((cat, sd.year, sd.month))
 
-        # 4. Recurring fixed commitments in window
-        monthly_commitments = self.expense_forecaster.get_recurring_monthly_commitments(
+        # 4. Recurring fixed commitments in window (suppressing double counting)
+        recurring_commitments = self.expense_forecaster.get_recurring_commitments(
             user_id, user_events, request_date
         )
         fixed_total = 0.0
         cur = req_d
         while cur < next_income_d:
-            for cat, (m_day, m_amt, _) in monthly_commitments.items():
-                if cur.day == m_day:
-                    fixed_total += m_amt
+            for cat, rec_exp in recurring_commitments.items():
+                if (cat, cur.year, cur.month) in scheduled_categories_in_window:
+                    continue
+                if rec_exp.cadence == 'monthly' and cur.day == rec_exp.day_of_month:
+                    fixed_total += rec_exp.amount
+                elif rec_exp.cadence == 'weekly' and cur.weekday() == rec_exp.day_of_week:
+                    fixed_total += rec_exp.amount
+                elif rec_exp.cadence == 'biweekly' and rec_exp.anchor_date:
+                    anchor_dt = datetime.strptime(rec_exp.anchor_date, "%Y-%m-%d")
+                    if (cur - anchor_dt).days > 0 and (cur - anchor_dt).days % 14 == 0:
+                        fixed_total += rec_exp.amount
             cur += timedelta(days=1)
 
-        # 5. Variable essential spending
+        # 5. Variable essential spending from calendar-week aggregation
         var_total = 0.0
         if self.stat_key is not None:
             var_stats = self.expense_forecaster.get_variable_essential_stats(user_events, request_date)
-            for cat, stats in var_stats.items():
-                weekly_amt = stats.get(self.stat_key, 0.0)
-                var_total += weekly_amt * (window_days / 7.0)
+            weekly_amt = var_stats.get(self.stat_key, 0.0)
+            var_total = weekly_amt * (window_days / 7.0)
 
         predicted_reserve = pending_total + sched_total + fixed_total + var_total
         headroom = current_available_balance - minimum_balance_to_keep
@@ -222,14 +239,15 @@ class TrueDailySimulationStrategy(ForecastingStrategy):
         self,
         income_forecaster: ConfirmedIncomeForecaster,
         expense_forecaster: ExpenseForecaster,
-        variable_spending_quantile: float = 0.90,
-        name_suffix: str = "90th",
+        variable_spending_stat: str = 'median',
+        name_suffix: Optional[str] = None,
     ):
-        super().__init__(f"true_daily_simulation_{name_suffix}")
+        suffix = name_suffix if name_suffix else variable_spending_stat
+        super().__init__(f"true_daily_simulation_{suffix}")
         self.simulator = DailyCashFlowSimulator(
             income_forecaster=income_forecaster,
             expense_forecaster=expense_forecaster,
-            variable_spending_quantile=variable_spending_quantile,
+            variable_spending_stat=variable_spending_stat,
             forecast_horizon_days=90,
         )
 

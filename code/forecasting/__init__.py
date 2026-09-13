@@ -1,7 +1,7 @@
 """
 Forecasting and Simulation Package for HackerRank Orchestrate 'Buy or Wait?'.
 Provides modular components for:
-- Event normalization and status resolution
+- Event normalization, image amount resolution, and exchange rate resolution
 - Confirmed income forecasting
 - Recurring fixed-expense forecasting
 - Variable essential-spending forecasting
@@ -10,9 +10,9 @@ Provides modular components for:
 - Comprehensive regression evaluator
 """
 
-from .normalization import EventNormalizer, ExchangeRateProvider
-from .income import ConfirmedIncomeForecaster
-from .expenses import ExpenseForecaster
+from .normalization import EventNormalizer, ExchangeRateProvider, ImageAmountResolver, RateResolution
+from .income import ConfirmedIncomeForecaster, RecurringIncomeSchedule
+from .expenses import ExpenseForecaster, RecurringExpense
 from .simulator import DailyCashFlowSimulator, SimulationResult
 from .strategies import (
     ForecastingStrategy,
@@ -29,8 +29,12 @@ from .evaluator import ForecastingRegressionEvaluator
 __all__ = [
     "EventNormalizer",
     "ExchangeRateProvider",
+    "ImageAmountResolver",
+    "RateResolution",
     "ConfirmedIncomeForecaster",
+    "RecurringIncomeSchedule",
     "ExpenseForecaster",
+    "RecurringExpense",
     "DailyCashFlowSimulator",
     "SimulationResult",
     "ForecastingStrategy",

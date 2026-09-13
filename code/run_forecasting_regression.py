@@ -1,9 +1,9 @@
 """
 Forecasting Regression Benchmark Runner.
 Executes the full forecasting test suite across all modular strategies and generates:
-- Comparative summary metrics (MAE, RMSE, Pearson r, Max Error)
+- Comparative summary metrics (MAE, RMSE, Pearson r, Max Error, Normalized Error %)
 - Comprehensive 25-request diagnostic tables
-- Forensic comparison against ground-truth sample requests
+- Focused report on key audit cases: request_05, request_10, request_12, request_23
 """
 
 import os
@@ -21,6 +21,7 @@ if repo_root not in sys.path:
 from forecasting import (
     EventNormalizer,
     ExchangeRateProvider,
+    ImageAmountResolver,
     ConfirmedIncomeForecaster,
     ExpenseForecaster,
     ExplicitEventsStrategy,
@@ -33,6 +34,7 @@ from forecasting import (
     ForecastingRegressionEvaluator,
 )
 
+
 def main():
     data_dir = os.path.join(repo_root, "dataset")
 
@@ -41,11 +43,12 @@ def main():
     profiles_df = pd.read_csv(os.path.join(data_dir, "financial_profiles.csv"))
     events_df = pd.read_csv(os.path.join(data_dir, "financial_events.csv"))
     messages_df = pd.read_csv(os.path.join(data_dir, "messages.csv"))
+    images_df = pd.read_csv(os.path.join(data_dir, "images.csv"))
     rates_df = pd.read_csv(os.path.join(data_dir, "exchange_rates.csv"))
 
     # Initialize modular forecasting layers
     rate_provider = ExchangeRateProvider(rates_df)
-    normalizer = EventNormalizer(events_df, rate_provider=rate_provider)
+    normalizer = EventNormalizer(events_df, images_df=images_df, rate_provider=rate_provider)
     income_forecaster = ConfirmedIncomeForecaster(messages_df)
     expense_forecaster = ExpenseForecaster(messages_df)
 
@@ -57,27 +60,27 @@ def main():
         FixedPlusMedianEssentialStrategy(income_forecaster, expense_forecaster),
         FixedPlus75thEssentialStrategy(income_forecaster, expense_forecaster),
         FixedPlus90thEssentialStrategy(income_forecaster, expense_forecaster),
-        TrueDailySimulationStrategy(income_forecaster, expense_forecaster, variable_spending_quantile=0.50, name_suffix="50th"),
-        TrueDailySimulationStrategy(income_forecaster, expense_forecaster, variable_spending_quantile=0.75, name_suffix="75th"),
-        TrueDailySimulationStrategy(income_forecaster, expense_forecaster, variable_spending_quantile=0.90, name_suffix="90th"),
-        TrueDailySimulationStrategy(income_forecaster, expense_forecaster, variable_spending_quantile=0.95, name_suffix="95th"),
+        TrueDailySimulationStrategy(income_forecaster, expense_forecaster, variable_spending_stat="mean"),
+        TrueDailySimulationStrategy(income_forecaster, expense_forecaster, variable_spending_stat="median"),
+        TrueDailySimulationStrategy(income_forecaster, expense_forecaster, variable_spending_stat="q75"),
+        TrueDailySimulationStrategy(income_forecaster, expense_forecaster, variable_spending_stat="q90"),
     ]
 
     evaluator = ForecastingRegressionEvaluator(samples_df, profiles_df, normalizer)
     all_diags, summary_df = evaluator.run_suite(strategies)
 
-    print("\n" + "=" * 100)
-    print("FORECASTING REGRESSION BENCHMARK RESULTS (25 SAMPLE REQUESTS)")
-    print("=" * 100)
+    print("\n" + "=" * 105)
+    print("REMEDIATED FORECASTING REGRESSION BENCHMARK RESULTS (25 SAMPLE REQUESTS)")
+    print("=" * 105)
     print(summary_df.to_string(index=False))
 
-    # Print Detailed Diagnostic Table for the True 90-Day Simulation (90th percentile)
-    best_sim_name = "true_daily_simulation_90th"
-    diag_df = all_diags[best_sim_name]
+    # Print Detailed Diagnostic Table for the True 90-Day Simulation (median essential)
+    sim_name = "true_daily_simulation_median"
+    diag_df = all_diags[sim_name]
 
-    print("\n" + "=" * 135)
-    print(f"DETAILED DIAGNOSTIC AUDIT TABLE ({best_sim_name})")
-    print("=" * 135)
+    print("\n" + "=" * 140)
+    print(f"DETAILED DIAGNOSTIC AUDIT TABLE ({sim_name})")
+    print("=" * 140)
     diag_cols = [
         'request_id', 'user_id', 'request_date', 'current_balance', 'minimum_balance',
         'next_confirmed_income_date', 'projected_minimum_balance_date', 'projected_minimum_balance',
@@ -87,11 +90,35 @@ def main():
     formatted_diag = diag_df[diag_cols].copy()
     print(formatted_diag.to_string(index=False))
 
+    # Print Focused Report on Key Discrepancy Cases
+    print("\n" + "=" * 105)
+    print("FOCUSED REMEDIATION VERIFICATION ON KEY AUDIT SAMPLES")
+    print("=" * 105)
+    audit_ids = ['request_05', 'request_10', 'request_12', 'request_23']
+    focus_df = diag_df[diag_df['request_id'].isin(audit_ids)][diag_cols].copy()
+    print(focus_df.to_string(index=False))
+
+    # Also compare all strategies on the 4 audit requests
+    print("\n" + "-" * 105)
+    print("COMPARATIVE SAFE AMOUNT PREDICTIONS ON AUDIT REQUESTS ACROSS STRATEGIES:")
+    print("-" * 105)
+    comp_records = []
+    for s in strategies:
+        d = all_diags[s.name]
+        row_dict = {'strategy': s.name}
+        for rid in audit_ids:
+            pred = d[d['request_id'] == rid]['predicted_safe_amount'].iloc[0]
+            gt = d[d['request_id'] == rid]['ground_truth_safe_amount'].iloc[0]
+            row_dict[rid] = f"{pred:.2f} (gt: {gt:.2f})"
+        comp_records.append(row_dict)
+    print(pd.DataFrame(comp_records).to_string(index=False))
+
     # Save outputs to scratch directory
     scratch_dir = os.path.join(repo_root, "..", ".scratch_eval")
     os.makedirs(scratch_dir, exist_ok=True)
-    summary_df.to_csv(os.path.join(scratch_dir, "forecasting_benchmark_summary.csv"), index=False)
-    diag_df.to_csv(os.path.join(scratch_dir, "true_sim_90th_diagnostics.csv"), index=False)
+    summary_df.to_csv(os.path.join(scratch_dir, "remediated_benchmark_summary.csv"), index=False)
+    diag_df.to_csv(os.path.join(scratch_dir, "remediated_sim_median_diagnostics.csv"), index=False)
+
 
 if __name__ == "__main__":
     main()
