@@ -165,6 +165,13 @@ class ConfirmedIncomeForecaster:
             & (user_events['settlement_date'] < req_d)
         ].copy()
 
+        # Clean salary stream: exclude commissions, bonuses, and secondary income per §6.3
+        if not hist_sal.empty:
+            non_base_mask = hist_sal['description'].str.lower().str.contains('bonus|commission|second household|arrears')
+            base_sal = hist_sal[~non_base_mask]
+            if not base_sal.empty:
+                hist_sal = base_sal
+
         if hist_sal.empty:
             # Check for scheduled salary on or after request_date
             sched_sal = user_events[
